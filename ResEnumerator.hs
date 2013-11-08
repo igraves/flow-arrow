@@ -1,73 +1,42 @@
-{-#LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecursiveDo #-}
 
-module REnumerator where
+module FlowArrowMonad where
 
-import Control.Monad.Resumption.Reactive
-import Control.Category
-import Control.Arrow
-import Prelude hiding ((.),id)
+import Prelude hiding (id,(.))
+import Control.Monad.Fix
+import Control.Monad.Identity
+import Debug.Trace
 
+newtype Flow m i o = Flow { deFlow :: (i -> m (Maybe o,Flow m i o)) }
 
-newtype Stream m a b = Stream { deStream :: forall c. a -> ReacT a b m c}
+instance Monad m => Category (Flow m) where
+  id = Flow (\ i -> return (Just i,id))
+  a . b = (flip (<//>)) a b
 
-instance Monad m => Category (Stream m) where
-  id = Stream $ preact id 
-  a . b = (flip (<//>)) a b 
+(<//>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
+f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
+                                               case mn of
+                                                 Just n -> do (o,g') <- k2 n
+                                                              return (o,f' <//> g')
+                                                 Nothing -> return (Nothing,f' <//> g))
 
-instance Monad m => Arrow (Stream m) where
-  arr f = Stream $ preact f 
-  first stream = Stream $ \(input,copy) -> ReacT $ do
-                                                    cmp <- deReacT $ (deStream stream) input
-                                                    case cmp of
-                                                          Left v -> return $ Left v 
-                                                          Right (output,f) -> return $ Right ((output,copy),endrun f)
-        where
-          --endrun :: Monad m => (a -> ReacT a b m c) -> ((a,d) -> ReacT (a,d) (b,d) m c)
-          endrun res = \(input,copy) -> ReacT $ do
-                                                  cmp <- deReacT $ res input
-                                                  case cmp of
-                                                       Left v -> return $ Left v 
-                                                       Right (output,res') -> return $ Right ((output,copy), endrun res')
+instance Monad m => Arrow (Flow m) where
+  arr f = Flow (\ i -> return (Just (f i),arr f))
+  first (Flow k) = Flow (\ (i,x) -> do (mo,f') <- k i
+                                       case mo of
+                                         Just o  -> return (Just (o,x),first f')
+                                         Nothing -> return (Nothing,first f'))
 
+instance Monad m => ArrowChoice (Flow m) where
+  left f@(Flow k) = Flow (\ ei -> case ei of
+                                    Left i  -> do (mn,f') <- k i
+                                                  case mn of
+                                                    Just n  -> return (Just (Left n),left f')
+                                                    Nothing -> return (Nothing,left f')
+                                    Right i -> return (Just (Right i),left f))
 
-(/>) :: (Monad m) => ReacT a b m c -> ReacT b d m c -> (a -> ReacT a d m c)
-a /> b = \input ->   ReacT $ do
-                           l <- deReacT a
-                           case l of 
-                                Left  term -> return $ Left term 
-                                Right cl   -> do
-                                                r <- deReacT b
-                                                case r of
-                                                     Left  term' -> return $ Left term'
-                                                     Right cr    -> do
-                                                                      (lresult,lcmp) <- runTick (cl) input --These aren't correct, knot is correct, however.
-                                                                      (rresult,rcmp) <- runTick (cr) lresult
-                                                                      return $ Right (rresult,lcmp `knot` rcmp)
-      where
-          runTick (_, f) inp = do 
-                                 r <- deReacT $ f inp
-                                 return $ fromRight r
-          fromRight (Right r) = r
-
-(<//>) :: Monad m => Stream m a b -> Stream m b c -> Stream m a c
-a <//> b = Stream $ (deStream a) `knot` (deStream b) 
-
---Knot takes two functions producing ReacT of chainable signals
---and merges them into one reactive resumption
-knot :: Monad m => (input -> ReacT input output1 m a) -> 
-                   (output1 -> ReacT output1 output m a) -> 
-                   (input -> ReacT input output m a)
-
-knot lre rre = \input -> ReacT $ do
-                                   lre' <- deReacT $ lre input
-                                   case lre' of
-                                          Left (res) -> return $ Left res 
-                                          Right (loutput,lres) -> do
-                                                                    rre' <- deReacT $ rre loutput
-                                                                    case rre' of
-                                                                           Left (res) -> return $  Left res
-                                                                           Right (routput,rres) -> return $ Right (routput, lres `knot` rres) 
-                            
-
-preact :: Monad m => (input -> output) -> (input -> ReacT input output m term)
-preact f = \input -> ReacT $ return $ Right (f input, preact f)
+instance MonadFix m => ArrowLoop (Flow m) where
+  loop (Flow k) = Flow (\ b -> mdo (mr@(~(Just (c,d))),f') <- k (b,d)
+                                   case mr of
+                                     Just _  -> return (Just c,loop f')
+                                     Nothing -> return (Nothing,loop f'))
