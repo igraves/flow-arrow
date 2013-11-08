@@ -1,7 +1,8 @@
 {-# LANGUAGE RecursiveDo #-}
 
 module FlowArrowMonad where
-
+import Control.Category
+import Control.Arrow
 import Prelude hiding (id,(.))
 import Control.Monad.Fix
 import Control.Monad.Identity
