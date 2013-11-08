@@ -6,6 +6,7 @@ import Control.Arrow
 import Prelude hiding (id,(.))
 import Control.Monad.Fix
 import Control.Monad.Identity
+import Control.Monad.Trans
 import Debug.Trace
 
 newtype Flow m i o = Flow { deFlow :: (i -> m (Maybe o,Flow m i o)) }
@@ -52,9 +53,20 @@ instance MonadPlus m => ArrowPlus (Flow m) where
                                                  
 instance Monad m => Monad (Flow m i) where                                                
   return o = Flow (\ _ -> return (Just o, return o))
-  (Flow k1) >>= g = Flow (\ i ->do (mn,f') <- k1 i
-                                   case mn of
-                                        Nothing -> return (Nothing, f' >>= g)
-                                        Just n -> return (undefined, g n))
-                                                     
-                      
+  Flow k1 >>= g = Flow (\ i -> do (mn,f') <- k1 i
+                                  case mn of
+                                    Nothing -> return (Nothing,f' >>= g)
+                                    Just n  -> deFlow (g n) i)
+  
+liftFlow :: Monad m => m o -> Flow m i o
+liftFlow m = Flow (\ _ -> do o <- m
+                             return (Just o,liftFlow m))
+
+newtype FlowT i m o = FlowT { deFlowT :: Flow m i o }
+
+instance MonadTrans (FlowT i) where
+  lift = FlowT . liftFlow
+
+instance Monad m => Monad (FlowT i m) where
+  return  = FlowT . return
+  m >>= f = FlowT (deFlowT m >>= deFlowT . f)
