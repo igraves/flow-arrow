@@ -31,7 +31,7 @@ instance Monad m => Arrow (Stream m) where
 
 
 (/>) :: (Monad m) => ReacT a b m c -> ReacT b d m c -> (a -> ReacT a d m c)
-a /> b = \input -> ReacT $ do
+a /> b = \input ->   ReacT $ do
                            l <- deReacT a
                            case l of 
                                 Left  term -> return $ Left term 
