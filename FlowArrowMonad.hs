@@ -3,6 +3,7 @@
 module FlowArrowMonad where
 import Control.Category
 import Control.Arrow
+import Data.Monoid
 import Prelude hiding (id,(.))
 import Control.Monad.Fix
 import Control.Monad.Identity
@@ -43,12 +44,16 @@ instance MonadFix m => ArrowLoop (Flow m) where
                                      Just _  -> return (Just c,loop f')
                                      Nothing -> return (Nothing,loop f'))
 
+
 instance MonadPlus m => ArrowZero (Flow m) where
   zeroArrow = Flow (\ _ -> mzero)
 
 
 instance MonadPlus m => ArrowPlus (Flow m) where
   (Flow k1) <+> (Flow k2) = Flow $ \ i -> do (k1 i `mplus` k2 i)
+
+instance Monad m => Functor (Flow m i) where
+  fmap f k1 = k1 <//> arr f
                                                  
 instance Monad m => Monad (Flow m i) where                                                
   return o = Flow (\ _ -> return (Just o, return o))
