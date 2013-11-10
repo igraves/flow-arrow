@@ -11,17 +11,17 @@ import Control.Monad.Trans
 import Control.Applicative
 
 {- | The Flow type for sequencing monadic computations.  
- -   Underlying monad m, input type i, and output type o.  
- -   Flow is a function that takes the input i and returns
- -   a pair of Maybe output and a (potentially updated) version
- -   of itself to call against again in the future.  The output is
- -   Maybe o instead of o to reflect that some calls against a Flow
- -   may not always readily return a value.  In situations like this,
- -   one should take the updated flow and call it again to try for a
- -   result in a future call.  This feature enables the modeling of 
- -   things like stalls or a "currently empty buffer" in a stream.  The 
- -   instances of Flow in the various typeclasses below assume this 
- -   behavior and implement it.
+    Underlying monad m, input type i, and output type o.  
+    Flow is a function that takes the input i and returns
+    a pair of Maybe output and a (potentially updated) version
+    of itself to call against again in the future.  The output is
+    Maybe o instead of o to reflect that some calls against a Flow
+    may not always readily return a value.  In situations like this,
+    one should take the updated flow and call it again to try for a
+    result in a future call.  This feature enables the modeling of 
+    things like stalls or a "currently empty buffer" in a stream.  The 
+    instances of Flow in the various typeclasses below assume this 
+    behavior and implement it.
  -}
 newtype Flow m i o = Flow { deFlow :: (i -> m (Maybe o,Flow m i o)) }
 
@@ -31,9 +31,9 @@ instance Monad m => Category (Flow m) where
   a . b = (flip (<//>)) a b
 
 {- | Flow sequence operator.  Takes two flows and chains them left to right.
- -   If the left hand side yields a nothing output, the sequence operator is
- -   executed against the updated version of the left hand argument to try
- -   again for a non-nothing output.
+    If the left hand side yields a nothing output, the sequence operator is
+    executed against the updated version of the left hand argument to try
+    again for a non-nothing output.
  -}
 (<//>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
 f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
@@ -85,12 +85,12 @@ instance Monad m => Functor (Flow m i) where
 
 
 {-Is an applicative functor as well.  "Pure" is taking a value and forming a Flow
- - that returns a pair with the value as the output and a resuming computation that 
- - recursively does the same thing.  
- -
- - <*> :: f (a -> b) -> f a -> f b in Flow forms a Flow that runs the left hand side 
- - until it yields a function (a -> b) and then tries to run the right hand side until 
- - it gets an (a) and then applies the function for the result.
+  that returns a pair with the value as the output and a resuming computation that 
+  recursively does the same thing.  
+ 
+  <*> :: f (a -> b) -> f a -> f b in Flow forms a Flow that runs the left hand side 
+  until it yields a function (a -> b) and then tries to run the right hand side until 
+  it gets an (a) and then applies the function for the result.
  -}
 instance Monad m => Applicative (Flow m i) where
   pure a  = Flow (\ _ -> return (Just a, pure a)) 
@@ -116,13 +116,12 @@ instance Monad m => Monad (Flow m i) where
                                     Nothing -> return (Nothing,f' >>= g)
                                     Just n  -> deFlow (g n) i)
 
---Flow is also a monad transformer.  
+{-| Flow is also a monad transformer.  This function performs a lift. -}
 liftFlow :: Monad m => m o -> Flow m i o
 liftFlow m = Flow (\ _ -> do o <- m
                              return (Just o,liftFlow m))
 
--- The underneath is a redefining of Flow so it can be fit into the MonadTrans type
--- as it's laid out in the MTL.
+{-| This is a redefining of Flow so it can be fit into the MonadTrans type  as it's laid out in the MTL.-}
 newtype FlowT i m o = FlowT { deFlowT :: Flow m i o }
 
 instance MonadTrans (FlowT i) where
