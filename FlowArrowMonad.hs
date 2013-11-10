@@ -6,7 +6,7 @@ import Control.Arrow
 import Data.Monoid
 import Prelude hiding (id,(.))
 import Control.Monad.Fix
-import Control.Monad.Identity
+import Control.Monad.Identity hiding (when)
 import Control.Monad.Trans
 import Control.Applicative
 
@@ -131,3 +131,39 @@ instance MonadTrans (FlowT i) where
 instance Monad m => Monad (FlowT i m) where
   return  = FlowT . return
   m >>= f = FlowT (deFlowT m >>= deFlowT . f)
+
+
+--Predicate Flow filters
+{-| Constructs a Flow by a given predicate. Stalls whenever input fails predicate test. -}
+when :: Monad m => (i -> Bool) -> Flow m i i
+when pred = Flow (\ input -> do
+                              case pred input of
+                                   True -> return (Just input,when pred)
+                                   _    -> return (Nothing,when pred))
+
+{-| Filters the output of a Flow by a predicate -}
+whenever :: Monad m => Flow m i o -> (o -> Bool) -> Flow m i o
+whenever f p = f <//> (when p)
+
+{-| Two-Flow Round-Robin merge.  Runs the first flow until it produces an output, then
+ -  switches to the second Flow and does the same before returning to the first. -}
+rr2 :: Monad m => Flow m i o -> Flow m i o -> Flow m i o
+rr2 f g = Flow (\ input -> do (mo, f') <- (deFlow f) input 
+                              case mo of
+                                   Nothing -> return (mo, f')
+                                   Just o  -> return (Just o, rr2 g f'))
+                            
+{-| Like rr2, but with three Flows-}
+rr3 :: Monad m => Flow m i o -> Flow m i o -> Flow m i o -> Flow m i o
+rr3 f g h = Flow (\ input -> do (mo, f') <- (deFlow f) input 
+                                case mo of
+                                     Nothing -> return (mo, f')
+                                     Just o  -> return (Just o, rr3 g h f'))
+
+{-| Like rr2, but with four Flows-}
+rr4 :: Monad m => Flow m i o -> Flow m i o -> 
+                  Flow m i o -> Flow m i o -> Flow m i o
+rr4 f g h i = Flow (\ input -> do (mo, f') <- (deFlow f) input 
+                                  case mo of
+                                       Nothing -> return (mo, f')
+                                       Just o  -> return (Just o, rr4 g h i f'))
