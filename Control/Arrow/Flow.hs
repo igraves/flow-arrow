@@ -1,10 +1,11 @@
 {-# LANGUAGE RecursiveDo #-}
 
-module FlowArrowMonad where
+module Control.Arrow.Flow where
 import Control.Category
 import Control.Arrow
 import Data.Monoid
-import Prelude hiding (id,(.))
+import Data.Foldable
+import Prelude hiding (id,(.),foldr,foldl)
 import Control.Monad.Fix
 import Control.Monad.Identity hiding (when)
 import Control.Monad.Trans
@@ -131,6 +132,17 @@ instance Monad m => Monad (FlowT i m) where
   return  = FlowT . return
   m >>= f = FlowT (deFlowT m >>= deFlowT . f)
 
+{-| Flows can be run on a foldable data structure to "termination" -}
+foldFlow :: (Monad m, Foldable t) => Flow m a b -> t a -> m ([b], Flow m a b)
+foldFlow flow x = foldl ff (return ([], flow)) x
+
+ff :: (Monad m) => m ([b], Flow m a b) -> a -> m ([b], Flow m a b)
+ff fl val = do
+              (vals,(Flow f)) <- fl
+              r <- f val 
+              case r of
+                   (Nothing,flow') -> ff (return (vals,flow')) val
+                   (Just x,flow')  -> return (vals ++ [x],flow')
 
 --Predicate Flow filters
 {-| Constructs a Flow by a given predicate. Stalls whenever input fails predicate test. -}
