@@ -40,7 +40,7 @@ instance Monad m => Category (Flow m) where
 f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
                                                case mn of
                                                  Just n -> do (o,g') <- k2 n
-                                                              return (o,f' <//> g')
+                                                              return (o,f' <//> g') --original 
                                                  Nothing -> return (Nothing,f' <//> g))
 
 -- (Flow m) is an instance of Arrow.  (Flow m) i o is analogous to 
@@ -178,3 +178,16 @@ rr4 f g h i = Flow (\ input -> do (mo, f') <- (deFlow f) input
                                   case mo of
                                        Nothing -> return (mo, f')
                                        Just o  -> return (Just o, rr4 g h i f'))
+{-| Stall underlying Flow one cycle -}
+stall :: Monad m => Flow m i o -> Flow m i o 
+stall flow = Flow $ \i -> return (Nothing,flow)
+
+{-| Stall underlying Flow two cycles  -}
+stall2 :: Monad m => Flow m i o -> Flow m i o 
+stall2 = stall . stall
+
+stall3 :: Monad m => Flow m i o -> Flow m i o 
+stall3 = stall . stall . stall
+
+stall4 :: Monad m => Flow m i o -> Flow m i o 
+stall4 = stall . stall . stall . stall
