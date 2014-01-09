@@ -10,6 +10,7 @@ import Control.Monad.Fix
 import Control.Monad.Identity hiding (when)
 import Control.Monad.Trans
 import Control.Applicative
+import Data.Maybe (isJust)
 
 {- | The Flow type for sequencing monadic computations.  
     Underlying monad m, input type i, and output type o.  
@@ -39,9 +40,17 @@ instance Monad m => Category (Flow m) where
 (<//>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
 f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
                                                case mn of
-                                                 Just n -> do (o,g') <- k2 n
-                                                              return (o,f' <//> g') --original 
+                                                 Just n -> return (Nothing, app_flow n f' g)
+                                                 --Just n -> do (o,g') <- k2 n
+                                                 --             return (o,f' <//> g') --original 
                                                  Nothing -> return (Nothing,f' <//> g))
+      where
+        app_flow :: Monad m => b -> Flow m a b -> Flow m b c -> Flow m a c
+        app_flow input left right = Flow (\_ -> do  (res, right') <- deFlow right input
+                                                    case res of
+                                                         Just _  -> return (res, left <//> right')
+                                                         Nothing -> return (Nothing, app_flow input left right'))
+                            
 
 -- (Flow m) is an instance of Arrow.  (Flow m) i o is analogous to 
 -- the Arrow a => a b c
@@ -143,6 +152,24 @@ ff fl val = do
               case r of
                    (Nothing,flow') -> ff (return (vals,flow')) val
                    (Just x,flow')  -> return (vals ++ [x],flow')
+--Routing Flow Combinators
+
+{-| Parallel choice combinator takes a list of alternative flows with their enabling
+ -  predicate functions.  If more than one function accepts the input, the result yielded
+ -  is the one that appears first in the list.  Undefined is probably a better term, however.
+ -}
+
+parchoice :: Monad m => [(a -> Bool, Flow m a b)] -> Flow m a b
+parchoice flows = Flow $ \i -> do
+                                 let flows' = map (\(p,f) -> gate p f) flows
+                                 outputs <- mapM ((flip deFlow) i) flows'
+                                 return (grab (map fst outputs), parchoice flows)
+    where
+      grab [] = Nothing
+      grab (j@(Just _):xs) = j
+      grab (x:xs) = grab xs
+                    
+
 
 --Predicate Flow filters
 {-| Constructs a Flow by a given predicate. Stalls whenever input fails predicate test. -}
@@ -152,9 +179,13 @@ when pred = Flow (\ input -> do
                                    True -> return (Just input,when pred)
                                    _    -> return (Nothing,when pred))
 
-{-| Filters the output of a Flow by a predicate -}
-whenever :: Monad m => Flow m i o -> (o -> Bool) -> Flow m i o
-whenever f p = f <//> (when p)
+{-| Gates a flow according to a predicate.  Flow is not run if predicate is false.  
+ - Nothing returned instead.
+ -}
+gate :: Monad m => (i -> Bool) -> Flow m i o -> Flow m i o
+gate pred flow = Flow $ \i -> case pred i of
+                                   True  -> deFlow flow i
+                                   False -> return (Nothing, gate pred flow)
 
 {-| Two-Flow Round-Robin merge.  Runs the first flow until it produces an output, then
  -  switches to the second Flow and does the same before returning to the first. -}
