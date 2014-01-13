@@ -12,6 +12,19 @@ import Control.Monad.Trans
 import Control.Applicative
 import Data.Maybe (isJust)
 
+{- | The stalled type is isomorphic to Maybe.  We keep the two 
+ -   separated here for bookkeeping purposes.  Some computations
+ -   can return a value wrapped in a Maybe and this keeps confusing
+ -   Maybe (Maybe a)'s from happening.
+ -}
+newtype Stalled a = Stalled {deStall :: (Maybe a)} 
+
+stalled :: Stalled a
+stalled = Stalled $ Nothing
+
+finished :: a -> Stalled a
+finished a = Stalled $ Just a
+
 {- | The Flow type for sequencing monadic computations.  
     Underlying monad m, input type i, and output type o.  
     Flow is a function that takes the input i and returns
@@ -25,11 +38,11 @@ import Data.Maybe (isJust)
     instances of Flow in the various typeclasses below assume this 
     behavior and implement it.
  -}
-newtype Flow m i o = Flow { deFlow :: (i -> m (Maybe o,Flow m i o)) }
+newtype Flow m i o = Flow { deFlow :: (i -> m (Stalled o,Flow m i o)) }
 
 -- Instance of Category for Arrow support
 instance Monad m => Category (Flow m) where
-  id = Flow (\ i -> return (Just i,id))
+  id = Flow (\ i -> return (finished i,id))
   a . b = (flip (<//>)) a b
 
 {- | Flow sequence operator.  Takes two flows and chains them left to right.
@@ -39,44 +52,43 @@ instance Monad m => Category (Flow m) where
  -}
 (<//>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
 f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
-                                               case mn of
-                                                 Just n -> return (Nothing, app_flow n f' g)
+                                               case deStall mn of
+                                                 Just n -> return (stalled, app_flow n f' g)
                                                  --Just n -> do (o,g') <- k2 n
                                                  --             return (o,f' <//> g') --original 
-                                                 Nothing -> return (Nothing,f' <//> g))
+                                                 Nothing -> return (stalled,f' <//> g))
       where
         app_flow :: Monad m => b -> Flow m a b -> Flow m b c -> Flow m a c
         app_flow input left right = Flow (\_ -> do  (res, right') <- deFlow right input
-                                                    case res of
+                                                    case deStall res of
                                                          Just _  -> return (res, left <//> right')
-                                                         Nothing -> return (Nothing, app_flow input left right'))
+                                                         Nothing -> return (stalled, app_flow input left right'))
                             
-
 -- (Flow m) is an instance of Arrow.  (Flow m) i o is analogous to 
 -- the Arrow a => a b c
 instance Monad m => Arrow (Flow m) where
-  arr f = Flow (\ i -> return (Just (f i),arr f))
+  arr f = Flow (\ i -> return (finished (f i),arr f))
   first (Flow k) = Flow (\ (i,x) -> do (mo,f') <- k i
-                                       case mo of
-                                         Just o  -> return (Just (o,x),first f')
-                                         Nothing -> return (Nothing,first f'))
+                                       case deStall mo of
+                                         Just o  -> return (finished (o,x),first f')
+                                         Nothing -> return (stalled,first f'))
 
 -- Instance of ArrowChoice which gives choice operators for Arrows.
 instance Monad m => ArrowChoice (Flow m) where
   left f@(Flow k) = Flow (\ ei -> case ei of
                                     Left i  -> do (mn,f') <- k i
-                                                  case mn of
-                                                    Just n  -> return (Just (Left n),left f')
-                                                    Nothing -> return (Nothing,left f')
-                                    Right i -> return (Just (Right i),left f))
+                                                  case deStall mn of
+                                                    Just n  -> return (finished (Left n),left f')
+                                                    Nothing -> return (stalled,left f')
+                                    Right i -> return (finished (Right i),left f))
 
 -- ArrowLoop is for computations that that feed back results into themselves
 -- This was defined by Adam's genius for Flows over MonadFix.
 instance MonadFix m => ArrowLoop (Flow m) where
-  loop (Flow k) = Flow (\ b -> mdo (mr@(~(Just (c,d))),f') <- k (b,d)
-                                   case mr of
-                                     Just _  -> return (Just c,loop f')
-                                     Nothing -> return (Nothing,loop f'))
+  loop (Flow k) = Flow (\ b -> mdo (mr@(~(Stalled(Just (c,d)))),f') <- k (b,d)
+                                   case deStall mr of
+                                     Just _  -> return (finished c,loop f')
+                                     Nothing -> return (stalled,loop f'))
 
 
 --If the underlying monad is MonadPlus, this feature rises to the Arrow level.
@@ -103,15 +115,15 @@ instance Monad m => Functor (Flow m i) where
   it gets an (a) and then applies the function for the result.
  -}
 instance Monad m => Applicative (Flow m i) where
-  pure a  = Flow (\ _ -> return (Just a, pure a)) 
+  pure a  = Flow (\ _ -> return (finished a, pure a)) 
   (Flow f) <*> (Flow g) = Flow (\ i -> do (mf, f') <- f i
-                                          case mf of
-                                               Nothing -> return (Nothing,f' <*> (Flow g))
+                                          case deStall mf of
+                                               Nothing -> return (stalled,f' <*> (Flow g))
                                                Just fo -> do 
                                                                   (mg,g') <- g i
-                                                                  case mg of
-                                                                       Nothing -> return (Nothing,(Flow f) <*> g')
-                                                                       Just go -> return (Just (fo go), f' <*> g'))
+                                                                  case deStall mg of
+                                                                       Nothing -> return (stalled,(Flow f) <*> g')
+                                                                       Just go -> return (finished (fo go), f' <*> g'))
                                                                    
                                            
                                                  
@@ -120,16 +132,16 @@ instance Monad m => Applicative (Flow m i) where
 --computed from the output given by running the right.  Not sure if this follows the 
 --Monad laws.
 instance Monad m => Monad (Flow m i) where                                                
-  return o = Flow (\ _ -> return (Just o, return o))
+  return o = Flow (\ _ -> return (finished o, return o))
   Flow k1 >>= g = Flow (\ i -> do (mn,f') <- k1 i
-                                  case mn of
-                                    Nothing -> return (Nothing,f' >>= g)
+                                  case deStall mn of
+                                    Nothing -> return (stalled,f' >>= g)
                                     Just n  -> deFlow (g n) i)
 
 {-| Flow is also a monad transformer.  This function performs a lift. -}
 liftFlow :: Monad m => m o -> Flow m i o
 liftFlow m = Flow (\ _ -> do o <- m
-                             return (Just o,liftFlow m))
+                             return (finished o,liftFlow m))
 
 {-| This is a redefining of Flow so it can be fit into the MonadTrans type  as it's laid out in the MTL.-}
 newtype FlowT i m o = FlowT { deFlowT :: Flow m i o }
@@ -150,8 +162,8 @@ ff fl val = do
               (vals,(Flow f)) <- fl
               r <- f val 
               case r of
-                   (Nothing,flow') -> ff (return (vals,flow')) val
-                   (Just x,flow')  -> return (vals ++ [x],flow')
+                   (Stalled Nothing,flow') -> ff (return (vals,flow')) val
+                   (Stalled (Just x),flow')  -> return (vals ++ [x],flow')
 --Routing Flow Combinators
 
 {-| Parallel choice combinator takes a list of alternative flows with their enabling
@@ -165,8 +177,8 @@ parchoice flows = Flow $ \i -> do
                                  outputs <- mapM ((flip deFlow) i) flows'
                                  return (grab (map fst outputs), parchoice flows)
     where
-      grab [] = Nothing
-      grab (j@(Just _):xs) = j
+      grab [] = stalled 
+      grab (j@(Stalled (Just _)):xs) = j
       grab (x:xs) = grab xs
                     
 
@@ -176,8 +188,8 @@ parchoice flows = Flow $ \i -> do
 when :: Monad m => (i -> Bool) -> Flow m i i
 when pred = Flow (\ input -> do
                               case pred input of
-                                   True -> return (Just input,when pred)
-                                   _    -> return (Nothing,when pred))
+                                   True -> return (finished input,when pred)
+                                   _    -> return (stalled,when pred))
 
 {-| Gates a flow according to a predicate.  Flow is not run if predicate is false.  
  - Nothing returned instead.
@@ -185,33 +197,33 @@ when pred = Flow (\ input -> do
 gate :: Monad m => (i -> Bool) -> Flow m i o -> Flow m i o
 gate pred flow = Flow $ \i -> case pred i of
                                    True  -> deFlow flow i
-                                   False -> return (Nothing, gate pred flow)
+                                   False -> return (stalled, gate pred flow)
 
 {-| Two-Flow Round-Robin merge.  Runs the first flow until it produces an output, then
  -  switches to the second Flow and does the same before returning to the first. -}
 rr2 :: Monad m => Flow m i o -> Flow m i o -> Flow m i o
 rr2 f g = Flow (\ input -> do (mo, f') <- (deFlow f) input 
-                              case mo of
+                              case deStall mo of
                                    Nothing -> return (mo, f')
-                                   Just o  -> return (Just o, rr2 g f'))
+                                   Just o  -> return (finished o, rr2 g f'))
                             
 {-| Like rr2, but with three Flows-}
 rr3 :: Monad m => Flow m i o -> Flow m i o -> Flow m i o -> Flow m i o
 rr3 f g h = Flow (\ input -> do (mo, f') <- (deFlow f) input 
-                                case mo of
+                                case deStall mo of
                                      Nothing -> return (mo, f')
-                                     Just o  -> return (Just o, rr3 g h f'))
+                                     Just o  -> return (finished o, rr3 g h f'))
 
 {-| Like rr2, but with four Flows-}
 rr4 :: Monad m => Flow m i o -> Flow m i o -> 
                   Flow m i o -> Flow m i o -> Flow m i o
 rr4 f g h i = Flow (\ input -> do (mo, f') <- (deFlow f) input 
-                                  case mo of
+                                  case deStall mo of
                                        Nothing -> return (mo, f')
-                                       Just o  -> return (Just o, rr4 g h i f'))
+                                       Just o  -> return (finished o, rr4 g h i f'))
 {-| Stall underlying Flow one cycle -}
 stall :: Monad m => Flow m i o -> Flow m i o 
-stall flow = Flow $ \i -> return (Nothing,flow)
+stall flow = Flow $ \i -> return (stalled,flow)
 
 {-| Stall underlying Flow two cycles  -}
 stall2 :: Monad m => Flow m i o -> Flow m i o 

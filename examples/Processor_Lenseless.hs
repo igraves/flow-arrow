@@ -3,7 +3,6 @@ module Processor where
 import Prelude hiding (and, read, set)
 import Control.Arrow.Flow
 import Control.Monad.State
-import Control.Lens hiding (set)
 import Data.Word
 import Data.Bits
 import Control.Applicative
@@ -28,23 +27,21 @@ type Register = Word16
 type MState = StateT Machine IO
 
 data Machine = Machine {
-                  _a :: Register,
-                  _b :: Register,
-                  _i :: Register,
-                  _pc :: Register,
-                  _mem :: [(Word16,Word16)],
-                  _code :: [(Word16,Ops)]
+                  a :: Register,
+                  b :: Register,
+                  i :: Register,
+                  pc :: Register,
+                  mem :: [(Word16,Word16)],
+                  code :: [(Word16,Ops)]
                } 
 
 
-makeLenses ''Machine
-
 instance Show Machine where
   show m = "{"
-            ++ "\n     A:  " ++ show ((^.a) m) 
-            ++ "\n     B:  " ++ show ((^.b) m) 
-            ++ "\n     I:  " ++ show ((^.i) m) 
-            ++ "\n     PC: " ++ show ((^.pc) m) 
+            ++ "\n     A:  " ++ show (a m) 
+            ++ "\n     B:  " ++ show (b m) 
+            ++ "\n     I:  " ++ show (i m) 
+            ++ "\n     PC: " ++ show (pc m) 
             ++ "\n}"
 
 updateMem c [] = [c]
@@ -57,49 +54,55 @@ lookupMem x [] = error $ show x
 
 add_ :: MState ()
 add_ = do
-         ra <- use a
-         rb <- use b
-         a .= ra + rb
+         m  <- get
+         let ra = a m 
+             rb = b m 
+         put $ m {a =ra + rb}
 
 store_ :: MState ()
 store_ = do
-          ri <- use i
-          ra <- use a
-          m  <- use mem
-          mem .= updateMem (ri,ra) m
+          m  <- get
+          let ri = i m
+              ra = a m
+              mm = mem m
+          put $ m {mem = updateMem (ri,ra) mm} 
 
 read_ :: MState ()
 read_ = do
-          ri <- use i
-          m  <- use mem
-          b .= lookupMem ri m
+          m  <- get
+          let ri = i m
+              mm = mem m
+          put $ m {b = lookupMem ri mm}
 
 jump_ :: MState ()
 jump_ = do
-          ra <- use a
-          pc .= ra
-          rpc <- use pc
-          liftIO $ print $ "PC PC PC: " ++ (show rpc)
+          m <- get
+          let ra = a m
+          put $ m {pc = ra}
 
 set_ :: MState ()
 set_ = do
-         ra <- use a
-         i .= ra
+         m <- get 
+         let ra = a m
+         put m {i = ra}
 
 and_ :: MState ()
 and_ = do
-         ra <- use a
-         rb <- use b
-         a .= ra .&. rb
+         m <- get
+         let ra = a m
+             rb = b m
+         put $ m { a = (ra .&. rb)}
 
 zeroA_ :: MState ()
 zeroA_ = do
-          a .= 0x0
+          m <- get
+          put $ m {a = 0x0}
 
 incrA_ :: MState ()
 incrA_ = do
-          ra <- use a
-          a .= ra + 0x1
+          m <- get
+          let ra = a m 
+          put $ m {a = ra + 0x1}
 err_ :: MState ()
 err_ = return ()
 
@@ -165,22 +168,23 @@ decode_execute = Flow $ \opcode -> do
 
 fetch :: Flow MState () Ops
 fetch = Flow $ \() -> do
-                       c <- use code 
-                       rpc <- use pc
-                       let op = lookupMem rpc c
-                       pc .= rpc + 1
-                       return (finished op, fetch)
+                       m <- get
+                       let cc = code m
+                           rpc = pc m
+                           op = lookupMem rpc cc
+                       put $ m {pc = rpc + 1}
+                       return (Just op, fetch)
 
 processor = fetch `viewer` decode_execute 
 
 --Testing routines
 test_machine = Machine {
-                            _a = 0,
-                            _b = 0,
-                            _i = 0,
-                            _pc = 0,
-                            _mem = zip [0x0000..0xFFFF] (repeat 0),
-                            _code = zip [0..] $ [
+                            a = 0,
+                            b = 0,
+                            i = 0,
+                            pc = 0,
+                            mem = zip [0x0000..0xFFFF] (repeat 0),
+                            code = zip [0..] $ [
                                                   IncrA,
                                                   ZeroA,
                                                   Jump
@@ -193,7 +197,7 @@ first `viewer` next = let vflow = Flow $ \i -> do
                                               liftIO $ print m
                                               liftIO $ putStrLn "<Enter to continue>"
                                               liftIO getLine 
-                                              return (finished i, vflow)
+                                              return (Just i, vflow)
                        in first <//> vflow <//> next
 
 --simulate :: Monad m => s -> Flow (StateT s m) () o -> m b
@@ -203,10 +207,10 @@ simulate s flow = do
                           print s'
                           simulate s' cont 
 
-step :: Machine -> Flow MState () () -> IO ((Stalled (),Flow MState () ()), Machine)
+step :: Machine -> Flow MState () () -> IO ((Maybe (),Flow MState () ()), Machine)
 step s flow = do
                 r@((result, cont),s') <- runStateT (deFlow flow ()) s 
-                case deStall result of
+                case result of
                      Nothing -> do
                                   print s' 
                                   step s' cont
