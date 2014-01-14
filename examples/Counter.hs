@@ -17,13 +17,13 @@ counter :: Flow Count a (a,Int)
 counter = Flow $ \input -> do
                               incr
                               c <- get
-                              return (Just (input,c), counter)
+                              return (finished (input,c), counter)
 				
 
 printer :: Show a => Flow Count a ()
 printer = Flow $ \input -> do
                               liftIO $ print input
-                              return (Just (), printer)
+                              return (finished (), printer)
 
 --This computation takes an input that is a member of Show
 --Each input gets counted by counter and then the piped through to printer

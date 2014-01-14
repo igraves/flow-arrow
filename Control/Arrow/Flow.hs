@@ -1,16 +1,16 @@
-{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RecursiveDo, ScopedTypeVariables #-}
 
 module Control.Arrow.Flow where
 import Control.Category
 import Control.Arrow
 import Data.Monoid
-import Data.Foldable
+import Data.Foldable hiding (any)
 import Prelude hiding (id,(.),foldr,foldl)
 import Control.Monad.Fix
 import Control.Monad.Identity hiding (when)
 import Control.Monad.Trans
 import Control.Applicative
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, catMaybes, fromJust)
 
 {- | The stalled type is isomorphic to Maybe.  We keep the two 
  -   separated here for bookkeeping purposes.  Some computations
@@ -33,6 +33,11 @@ stalled = Stalled $ Nothing
 
 finished :: a -> Stalled a
 finished a = Stalled $ Just a
+
+instance Functor Stalled where
+  fmap f stall = case deStall stall of 
+                      Nothing  -> Stalled Nothing
+                      (Just a) -> Stalled $ Just $ f a
 
 {- | The Flow type for sequencing monadic computations.  
     Underlying monad m, input type i, and output type o.  
@@ -199,22 +204,48 @@ foldFlow flow x = foldl ff (return ([], flow)) x
 
 --Routing Flow Combinators
 
+{-| Evaluates all of the flows in the list in parallel until they've run to completion.  
+ -  Blocks until all have completed.
+ -}
+
+evalall :: forall a b m. Monad m => [Flow m a b] -> Flow m a [b]
+evalall flws = evalall' $ zip (repeat Nothing) flws
+  where
+    evalall' :: Monad m => [(Maybe b, Flow m a b)] -> Flow m a [b]
+    evalall' flows = Flow $ \i -> case any (\(a,_) -> isNothing a) flows of
+                                   True -> do 
+                                            flows' <- mapM (step i) flows
+                                            return (stalled, evalall' flows')
+                                   False -> do 
+                                            return (finished $ catMaybes $ map fst flows, evalall flws)
+    
+    step :: Monad m => a -> (Maybe b, Flow m a b) -> m (Maybe b, Flow m a b)
+    step _ s@(Just _, _) = return s 
+    step inp (Nothing, flow) = do
+                                 (res, cont) <- deFlow flow inp
+                                 case deStall res of
+                                      Just n  -> return (Just n, cont)
+                                      Nothing -> return (Nothing, cont)
+
+    isNothing Nothing = True
+    isNothing _ = False
+
+
+
 {-| Parallel choice combinator takes a list of alternative flows with their enabling
  -  predicate functions.  If more than one function accepts the input, the result yielded
  -  is the one that appears first in the list.  Undefined is probably a better term, however.
  -}
-
-parchoice :: Monad m => [(a -> Bool, Flow m a b)] -> Flow m a b
-parchoice flows = Flow $ \i -> do
-                                 let flows' = map (\(p,f) -> gate p f) flows
-                                 outputs <- mapM ((flip deFlow) i) flows'
-                                 return (grab (map fst outputs), parchoice flows)
-    where
-      grab [] = stalled 
-      grab (j@(Stalled (Just _)):xs) = j
-      grab (x:xs) = grab xs
-                    
-
+parchoice :: Monad m => [(a -> Bool, Flow m a b)] -> Flow m a b -> Flow m a b
+parchoice flows dflt = let totaled = (map (\(a,b) -> gate a b) flows) ++ [(gate (\_ -> True) dflt)]
+                        in (evalall totaled) </> match_just
+      where
+        --This function should be hidden because the totality of the choice is ensured
+        --by its wrapper using the "default" function as the second argument
+        --This is tacked onto the end of the list and is picked last if all other
+        --choices fail
+        match_just :: Monad m => Flow m [Maybe a] a
+        match_just = Flow $ \i -> return (finished $ fromJust $ fromJust $ find (isJust) i, match_just)
 
 --Predicate Flow filters
 {-| Constructs a Flow by a given predicate. Stalls whenever input fails predicate test. -}
@@ -227,10 +258,12 @@ when pred = Flow (\ input -> do
 {-| Gates a flow according to a predicate.  Flow is not run if predicate is false.  
  - Nothing returned instead.
  -}
-gate :: Monad m => (i -> Bool) -> Flow m i o -> Flow m i o
+gate :: Monad m => (i -> Bool) -> Flow m i o -> Flow m i (Maybe o)
 gate pred flow = Flow $ \i -> case pred i of
-                                   True  -> deFlow flow i
-                                   False -> return (stalled, gate pred flow)
+                                   True  -> do 
+                                              (res, cont) <- deFlow flow i
+                                              return (fmap Just res, gate pred cont)
+                                   False -> return (finished Nothing, gate pred flow)
 
 {-| Two-Flow Round-Robin merge.  Runs the first flow until it produces an output, then
  -  switches to the second Flow and does the same before returning to the first. -}

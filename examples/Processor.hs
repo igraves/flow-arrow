@@ -100,6 +100,7 @@ incrA_ :: MState ()
 incrA_ = do
           ra <- use a
           a .= ra + 0x1
+
 err_ :: MState ()
 err_ = return ()
 
@@ -143,9 +144,8 @@ decode_execute = parchoice [
             ((==Jump), jump),
             ((==Set), set),
             ((==ZeroA), zeroA),
-            ((==IncrA), incrA),
-            (\_ -> True, err)
-          ]
+            ((==IncrA), incrA)
+          ] err 
 {-
 decode_execute :: Flow MState Ops ()
 decode_execute = Flow $ \opcode -> do 
@@ -171,7 +171,7 @@ fetch = Flow $ \() -> do
                        pc .= rpc + 1
                        return (finished op, fetch)
 
-processor = fetch `viewer` decode_execute 
+processor = fetch </> decode_execute
 
 --Testing routines
 test_machine = Machine {
@@ -187,33 +187,23 @@ test_machine = Machine {
                                                 ]
                              
                        }
-viewer :: (MonadIO m, Show s) => Flow (StateT s m) a b -> Flow (StateT s m) b c -> Flow (StateT s m) a c 
-first `viewer` next = let vflow = Flow $ \i -> do 
-                                              m <- get 
-                                              liftIO $ print m
-                                              liftIO $ putStrLn "<Enter to continue>"
-                                              liftIO getLine 
-                                              return (finished i, vflow)
-                       in first </> vflow </> next
+
+debug :: String -> Flow MState a a 
+debug label = Flow $ \i -> do
+                       liftIO $ putStrLn label
+                       s <- get
+                       liftIO $ print s
+                       return (finished i, debug label)
 
 --simulate :: Monad m => s -> Flow (StateT s m) () o -> m b
 simulate :: Machine -> Flow MState () () -> IO b
 simulate s flow = do
-                          ((result, cont),s') <- step s flow
+                          ((result, cont),s') <- runStateT (deFlow flow ()) s 
+                          print result
                           print s'
+                          putStrLn $ "<Enter to continue>"
+                          getLine
                           simulate s' cont 
-
-step :: Machine -> Flow MState () () -> IO ((Stalled (),Flow MState () ()), Machine)
-step s flow = do
-                r@((result, cont),s') <- runStateT (deFlow flow ()) s 
-                case deStall result of
-                     Nothing -> do
-                                  print s' 
-                                  step s' cont
-                     Just ()  -> do
-                                   return r
-                                  
-                          
 
 main :: IO ()
 main = do
