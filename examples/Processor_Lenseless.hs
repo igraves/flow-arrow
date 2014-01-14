@@ -173,7 +173,7 @@ fetch = Flow $ \() -> do
                            rpc = pc m
                            op = lookupMem rpc cc
                        put $ m {pc = rpc + 1}
-                       return (Just op, fetch)
+                       return (finished op, fetch)
 
 processor = fetch `viewer` decode_execute 
 
@@ -197,7 +197,7 @@ first `viewer` next = let vflow = Flow $ \i -> do
                                               liftIO $ print m
                                               liftIO $ putStrLn "<Enter to continue>"
                                               liftIO getLine 
-                                              return (Just i, vflow)
+                                              return (finished i, vflow)
                        in first <//> vflow <//> next
 
 --simulate :: Monad m => s -> Flow (StateT s m) () o -> m b
@@ -207,10 +207,10 @@ simulate s flow = do
                           print s'
                           simulate s' cont 
 
-step :: Machine -> Flow MState () () -> IO ((Maybe (),Flow MState () ()), Machine)
+step :: Machine -> Flow MState () () -> IO ((Stalled (),Flow MState () ()), Machine)
 step s flow = do
                 r@((result, cont),s') <- runStateT (deFlow flow ()) s 
-                case result of
+                case deStall result of
                      Nothing -> do
                                   print s' 
                                   step s' cont

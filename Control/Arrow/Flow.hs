@@ -19,8 +19,17 @@ import Data.Maybe (isJust)
  -}
 newtype Stalled a = Stalled {deStall :: (Maybe a)} 
 
+
+instance Show s => Show (Stalled s) where
+  show (Stalled Nothing) = "Stalled"
+  show (Stalled a) = show a
+
+{-| Convenience function for stalling. -}
+
 stalled :: Stalled a
 stalled = Stalled $ Nothing
+
+{-| Convenience function for returning a value -}
 
 finished :: a -> Stalled a
 finished a = Stalled $ Just a
@@ -50,10 +59,33 @@ instance Monad m => Category (Flow m) where
     executed against the updated version of the left hand argument to try
     again for a non-nothing output.
  -}
+(</>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
+f@(Flow k1) </> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
+                                              case deStall mn of
+                                                Just n  -> do
+                                                              --Try to run g once, if not flip to app_flow
+                                                              (rr, g') <- k2 n
+                                                              case deStall rr of
+                                                                Just n  -> return (rr, f' </> g')
+                                                                Nothing -> return (stalled, app_flow n f' g')
+                                                Nothing -> return (stalled,f' </> g))
+      where
+        app_flow :: Monad m => b -> Flow m a b -> Flow m b c -> Flow m a c
+        app_flow input left right = Flow (\_ -> do  (res, right') <- deFlow right input
+                                                    case deStall res of
+                                                         Just _  -> return (res, left </> right')
+                                                         Nothing -> return (stalled, app_flow input left right'))
+
+{- | Flow sequence operator.  Takes two flows and chains them left to right.
+    If the left hand side yields a nothing output, the sequence operator is
+    executed against the updated version of the left hand argument to try
+    again for a non-nothing output.  This operator introduces a stall
+    between connected flows.
+ -}
 (<//>) :: Monad m => Flow m a b -> Flow m b c -> Flow m a c
 f@(Flow k1) <//> g@(Flow k2) = Flow (\ i -> do (mn,f') <- k1 i
                                                case deStall mn of
-                                                 Just n -> return (stalled, app_flow n f' g)
+                                                 Just n  -> return (stalled, app_flow n f' g)
                                                  --Just n -> do (o,g') <- k2 n
                                                  --             return (o,f' <//> g') --original 
                                                  Nothing -> return (stalled,f' <//> g))
