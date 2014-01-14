@@ -198,7 +198,7 @@ first `viewer` next = let vflow = Flow $ \i -> do
                                               liftIO $ putStrLn "<Enter to continue>"
                                               liftIO getLine 
                                               return (finished i, vflow)
-                       in first <//> vflow <//> next
+                       in first </> vflow </> next
 
 --simulate :: Monad m => s -> Flow (StateT s m) () o -> m b
 simulate :: Machine -> Flow MState () () -> IO b
@@ -222,4 +222,4 @@ step s flow = do
 main :: IO ()
 main = do
           putStrLn "Starting simulation..."
-          simulate test_machine (processor) -- <//> (flow_viewer processor)) 
+          simulate test_machine (processor) -- </> (flow_viewer processor)) 

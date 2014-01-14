@@ -188,14 +188,15 @@ instance Monad m => Monad (FlowT i m) where
 {-| Flows can be run on a foldable data structure to "termination" -}
 foldFlow :: (Monad m, Foldable t) => Flow m a b -> t a -> m ([b], Flow m a b)
 foldFlow flow x = foldl ff (return ([], flow)) x
+  where
+    ff :: (Monad m) => m ([b], Flow m a b) -> a -> m ([b], Flow m a b)
+    ff fl val = do
+                  (vals,(Flow f)) <- fl
+                  r <- f val 
+                  case r of
+                       (Stalled Nothing,flow') -> ff (return (vals,flow')) val
+                       (Stalled (Just x),flow')  -> return (vals ++ [x],flow')
 
-ff :: (Monad m) => m ([b], Flow m a b) -> a -> m ([b], Flow m a b)
-ff fl val = do
-              (vals,(Flow f)) <- fl
-              r <- f val 
-              case r of
-                   (Stalled Nothing,flow') -> ff (return (vals,flow')) val
-                   (Stalled (Just x),flow')  -> return (vals ++ [x],flow')
 --Routing Flow Combinators
 
 {-| Parallel choice combinator takes a list of alternative flows with their enabling
