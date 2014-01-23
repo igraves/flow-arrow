@@ -10,14 +10,14 @@ type RMachine a = Flow (Reader a) Bool Bool
 
 match :: Eq a => a -> RMachine a
 match a = Flow $ \input ->
+                           --Stall so we can initialize our flip flop
                            return (stalled, match_ input a)
-
-
-match_ :: Eq a => Bool -> a -> RMachine a
-match_ ff a = Flow $ \presult -> do
-                                    input <- ask --Read the character from the "character bank"
-                                    let output = ff && (a == input)
-                                    return (finished output, match_ presult a) 
+  where
+      match_ :: Eq a => Bool -> a -> RMachine a
+      match_ ff a = Flow $ \presult -> do
+                                          input <- ask --Read the character from the "character bank"
+                                          let output = ff && (a == input)
+                                          return (finished output, match_ presult a) 
 
 --An alternative to stalling is setting the intial values
 --of flip flops.  These values vary based on the position 
