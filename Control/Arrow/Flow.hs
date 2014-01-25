@@ -57,7 +57,7 @@ newtype Flow m i o = Flow { deFlow :: (i -> m (Stalled o,Flow m i o)) }
 -- Instance of Category for Arrow support
 instance Monad m => Category (Flow m) where
   id = Flow (\ i -> return (finished i,id))
-  a . b = (flip (<//>)) a b
+  a . b = (flip (</>)) a b
 
 {- | Flow sequence operator.  Takes two flows and chains them left to right.
     If the left hand side yields a nothing output, the sequence operator is
@@ -140,7 +140,7 @@ instance MonadPlus m => ArrowPlus (Flow m) where
 --function into Flow and "appending it to the end of a computation" using the
 --arr function to lift pure functions into an Arrow.
 instance Monad m => Functor (Flow m i) where
-  fmap f k1 = k1 <//> arr f
+  fmap f k1 = k1 </> arr f
 
 
 {-Is an applicative functor as well.  "Pure" is taking a value and forming a Flow
@@ -203,6 +203,36 @@ foldFlow flow x = foldl ff (return ([], flow)) x
                        (Stalled (Just x),flow')  -> return (vals ++ [x],flow')
 
 --Routing Flow Combinators
+{-| Evaluates two unique flow in parallel and returns their results when they have both completed 
+ -  This is a hand-implemented (***) function for Arrows.
+ - -}
+evalPar :: forall a b c d m. Monad m => Flow m a b -> Flow m c d -> Flow m (a,c) (b,d)
+evalPar f1 f2 = evalPar' ((Nothing,f1),(Nothing,f2)) 
+  where
+    evalPar' :: Monad m => ((Maybe b,Flow m a b),(Maybe d, Flow m c d)) -> Flow m (a,c) (b,d)
+    evalPar' wpair@((r1,ff1),(r2,ff2)) = Flow $ \(a,c) -> case (isNothing r1) || (isNothing r2) of
+                                                  True -> do 
+                                                            wpair' <- step (a,c) wpair
+                                                            return (stalled, evalPar' wpair')
+                                                  False -> return (finished ((fromJust r1),(fromJust r2)), evalPar ff1 ff2) 
+    
+    step :: Monad m => (a,c) -> ((Maybe b, Flow m a b),(Maybe d, Flow m c d)) -> m ((Maybe b, Flow m a b),(Maybe d, Flow m c d))
+    step _ s@((Just _,_),(Just _,_)) = return s
+    step (a,b) (p1,p2) = do 
+                           p1' <- runPair a p1
+                           p2' <- runPair b p2
+                           return (p1',p2') 
+
+    --runPair :: Monad m => a -> (Maybe b, Flow m a b) -> m (Maybe b, Flow m a b)
+    --Scoped type variables keeps me from making this explicit :)
+    runPair _ s@(Just _,_) = return s
+    runPair inp (Nothing, flow) = do
+                                 (res, cont) <- deFlow flow inp
+                                 case deStall res of
+                                      Just n  -> return (Just n, cont)
+                                      Nothing -> return (Nothing, cont)
+    isNothing Nothing = True
+    isNothing _       = False
 
 {-| Evaluates all of the flows in the list in parallel until they've run to completion.  
  -  Blocks until all have completed.
@@ -233,8 +263,7 @@ evalall flws = evalall' $ zip (repeat Nothing) flws
 
 
 {-| Parallel choice combinator takes a list of alternative flows with their enabling
- -  predicate functions.  If more than one function accepts the input, the result yielded
- -  is the one that appears first in the list.  Undefined is probably a better term, however.
+ -  predicate functions.  If more than one function accepts the input, the result is undefined.
  -}
 parchoice :: Monad m => [(a -> Bool, Flow m a b)] -> Flow m a b -> Flow m a b
 parchoice flows dflt = let totaled = (map (\(a,b) -> gate a b) flows) ++ [(gate (\_ -> True) dflt)]
@@ -300,3 +329,20 @@ stall3 = stall . stall . stall
 
 stall4 :: Monad m => Flow m i o -> Flow m i o 
 stall4 = stall . stall . stall . stall
+
+{-| Split flows merging 
+ -
+ -      __
+ - -a->|__|-b->       ____
+ -             |--b->|    |
+ -                   |    |-e->
+ -      __     |--d->|____|
+ - -c->|__|-d->
+ -
+ - -}
+merge :: Monad m => Flow m a b -> Flow m c d -> Flow m (b,d) e -> Flow m (a,c) e
+merge f1 f2 f3 = (f1 *** f2) </> f3
+
+
+
+
